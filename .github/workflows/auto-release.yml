@@ -157,19 +157,43 @@ jobs:
         run: |
           echo "清空18PlusList.txt"
           echo "">$GITHUB_WORKSPACE/app/src/main/assets/18PlusList.txt
-      - name: Release Apk Sign
-        # 仅当仓库配了 SIGNING_KEY secret 时才尝试签名（HapeLee 配了，liu1970 默认没有）
-        if: ${{ github.actor == 'HapeLee' && secrets.SIGNING_KEY != '' }}
+      - name: Detect signing secrets availability
+        id: detect_signing
         shell: bash
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          echo "${{ secrets.SIGNING_KEY }}" | base64 -d >"$GITHUB_WORKSPACE/app/my-release-key.jks"
+          # GitHub Actions 不允许 if:` 里读 secrets。keys 与这里读 env 后写 "1" / ""，
+          # 后面 step 用 env.HAS_SIGNING_KEY 控制是否需要签名。
+          if [ -n "$SIGNING_KEY" ] && [ -n "$KEYSTORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
+            echo "HAS_SIGNING_KEY=1" >> "$GITHUB_ENV"
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "HAS_SIGNING_KEY=" >> "$GITHUB_ENV"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::signing secrets not configured; release APK will use debug keystore"
+          fi
+
+      - name: Release Apk Sign
+        if: steps.detect_signing.outputs.ok == 'true'
+        shell: bash
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          echo "$SIGNING_KEY" | base64 -d >"$GITHUB_WORKSPACE/app/my-release-key.jks"
 
           {
             echo ""
             echo "RELEASE_STORE_FILE=my-release-key.jks"
-            echo "RELEASE_STORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}"
-            echo "RELEASE_KEY_ALIAS=${{ secrets.KEY_ALIAS }}"
-            echo "RELEASE_KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}"
+            echo "RELEASE_STORE_PASSWORD=$KEYSTORE_PASSWORD"
+            echo "RELEASE_KEY_ALIAS=$KEY_ALIAS"
+            echo "RELEASE_KEY_PASSWORD=$KEY_PASSWORD"
           } >> "$GITHUB_WORKSPACE/gradle.properties"
 
       - name: Set up Gradle
