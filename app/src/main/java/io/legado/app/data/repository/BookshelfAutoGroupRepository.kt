@@ -24,14 +24,15 @@ class BookshelfAutoGroupRepository(
         val groupDao = database.bookGroupDao
         val allGroups = groupDao.all
         val publicGroups = allGroups.filter { it.isUserGroup() && !it.isPrivate }
-        val privateGroupMask = allGroups
+        val privateGroupIds = allGroups
             .asSequence()
             .filter { it.isUserGroup() && it.isPrivate }
-            .fold(0L) { mask, group -> mask or group.groupId }
+            .map { it.groupId }
+            .toSet()
         val books = database.bookDao.getAll()
             .filterNot { it.isNotShelf }
             // Private shelf metadata must not be sent to an external AI provider.
-            .filter { book -> book.group and privateGroupMask == 0L }
+            .filter { book -> book.groupId !in privateGroupIds }
             .sortedWith(compareBy<Book> { it.name }.thenBy { it.author })
         BookshelfAutoGroupSource(
             books = books.map { book ->
@@ -41,7 +42,7 @@ class BookshelfAutoGroupRepository(
                     author = book.author,
                     intro = book.groupingIntro(),
                     kind = book.customTag ?: book.kind.orEmpty(),
-                    currentGroupNames = groupDao.getGroupNames(book.group),
+                    currentGroupNames = groupDao.getGroupNames(book.groupId),
                 )
             },
             existingGroupNames = publicGroups
@@ -58,14 +59,17 @@ class BookshelfAutoGroupRepository(
             val groupDao = database.bookGroupDao
             val bookDao = database.bookDao
             val allGroups = groupDao.all
-            val privateGroupMask = allGroups
+            // groupId 改为单一 ID 后：私密分组改为 Set<groupId>，判断用 contains
+            val privateGroupIds = allGroups
                 .asSequence()
                 .filter { it.isUserGroup() && it.isPrivate }
-                .fold(0L) { mask, group -> mask or group.groupId }
-            val publicGroupMask = allGroups
+                .map { it.groupId }
+                .toSet()
+            val publicGroupIds = allGroups
                 .asSequence()
                 .filter { it.isUserGroup() && !it.isPrivate }
-                .fold(0L) { mask, group -> mask or group.groupId }
+                .map { it.groupId }
+                .toSet()
             val existingGroups = allGroups
                 .filter { it.isUserGroup() && !it.isPrivate }
                 .associateBy(BookGroup::groupName)
@@ -80,7 +84,7 @@ class BookshelfAutoGroupRepository(
                     val entity = bookDao.getBook(plannedBook.bookUrl)
                     // Re-check membership because the user may have grouped the book after analysis.
                     val shouldSkip = entity == null || (
-                        options.incrementalOnly && entity.group and publicGroupMask != 0L
+                        options.incrementalOnly && entity.groupId in publicGroupIds
                     )
                     if (shouldSkip) {
                         skippedBookCount++
@@ -97,9 +101,9 @@ class BookshelfAutoGroupRepository(
                 .map { (group, _) -> group.name }
                 .distinct()
                 .count { it !in existingGroups }
-            val occupiedGroupBits = allGroups.count { it.isUserGroup() }
-            val availableGroupBits = (MAX_USER_GROUPS - occupiedGroupBits).coerceAtLeast(0)
-            if (newGroupCount > availableGroupBits) {
+            val occupiedGroupCount = allGroups.count { it.isUserGroup() }
+            val availableGroupSlots = (MAX_USER_GROUPS - occupiedGroupCount).coerceAtLeast(0)
+            if (newGroupCount > availableGroupSlots) {
                 throw BookshelfAutoGroupException(
                     BookshelfAutoGroupErrorReason.GroupCapacityExceeded
                 )
@@ -112,8 +116,6 @@ class BookshelfAutoGroupRepository(
                     existing.groupId
                 } else {
                     val newGroupId = groupDao.getUnusedId()
-                    // A zero id means all 64 group bits are already occupied; Long.MIN_VALUE
-                    // is the reserved private-group bit and must not back a public group.
                     if (newGroupId == 0L || newGroupId == Long.MIN_VALUE) {
                         throw BookshelfAutoGroupException(
                             BookshelfAutoGroupErrorReason.GroupCapacityExceeded
@@ -128,7 +130,7 @@ class BookshelfAutoGroupRepository(
                         bookSort = -1,
                         isPrivate = false,
                     )
-                    // Clear any stale bit before reusing a historical group id.
+                    // 清除复用历史 groupId 时留在这本书上的旧分配。
                     bookDao.removeGroup(newGroupId)
                     groupDao.insert(newGroup)
                     existingGroups[group.name] = newGroup
@@ -142,8 +144,10 @@ class BookshelfAutoGroupRepository(
                 val targetGroupId = targetGroupIds[group.key] ?: return@flatMap emptyList()
                 books.mapNotNull { entity ->
                     // Auto-grouping replaces public memberships but never removes private ones.
-                    val updatedGroup = (entity.group and privateGroupMask) or targetGroupId
-                    entity.takeIf { it.group != updatedGroup }?.copy(group = updatedGroup)
+                    // 书的 groupId 已在私密分组中 → 跳过（私密优先）；否则改为目标分组。
+                    if (entity.groupId in privateGroupIds) null
+                    else entity.takeIf { it.groupId != targetGroupId }
+                        ?.copy(groupId = targetGroupId)
                 }
             }
             if (updates.isNotEmpty()) {

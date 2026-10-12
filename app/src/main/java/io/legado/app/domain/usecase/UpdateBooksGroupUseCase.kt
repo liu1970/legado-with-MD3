@@ -13,11 +13,11 @@ class UpdateBooksGroupUseCase(
     suspend fun updateGroups(bookUrls: Set<String>, transform: (Long) -> Long) {
         if (bookUrls.isEmpty()) return
         val updateGroups = bookRepository.getBookGroupAssignments(bookUrls).mapNotNull { book ->
-            val targetGroup = transform(book.group)
-            if (targetGroup == book.group) {
+            val targetGroup = transform(book.groupId)
+            if (targetGroup == book.groupId) {
                 null
             } else {
-                book.copy(group = targetGroup)
+                book.copy(groupId = targetGroup)
             }
         }
         bookRepository.updateBookGroups(updateGroups)

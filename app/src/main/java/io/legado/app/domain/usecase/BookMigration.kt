@@ -46,7 +46,7 @@ internal fun Book.migrateInto(
         target.durChapterTime = System.currentTimeMillis()
     }
     if (options.migrateGroup) {
-        target.group = group
+        target.groupId = groupId
         target.order = order
     }
     if (options.migrateCover) {
@@ -86,7 +86,7 @@ internal fun Book.copyMigratableFieldsTo(
     options: ChangeSourceMigrationOptions,
 ) {
     if (options.migrateGroup) {
-        target.group = group
+        target.groupId = groupId
     }
     if (options.migrateCover) {
         target.customCoverUrl = customCoverUrl

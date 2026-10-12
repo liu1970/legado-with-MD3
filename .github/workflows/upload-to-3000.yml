@@ -1,0 +1,236 @@
+# 上传构建产物到内网 http://192.168.1.8:3000/upload
+#
+# 协议: multipart/form-data POST（内网无认证）
+# 上传内容:
+#   1. APK（debug / release / arm64-v8a + armeabi-v7a，文件名形如 legado-debug-192.apk）
+#   2. patch 文件 .github/patches/offline-cache-bookshelf-v1.patch
+#
+# 触发:
+#   - workflow_run: replay-offline-cache.yml 成功完成
+#   - push 到 main
+#   - pull_request（仅在合并时上传）
+#   - workflow_dispatch (手动)
+#
+# 失败不阻塞主流程：上传失败只发警告，不让整个 workflow 红。
+
+name: Upload build artifacts to 192.168.1.8:3000
+
+on:
+  workflow_run:
+    workflows: [Reapply offcache + 书架改造]
+    types:
+      - completed
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+    types:
+      - closed  # 只在 PR 合并后上传
+  workflow_dispatch:
+    inputs:
+      upload_apk:
+        description: '上传 APK'
+        required: false
+        type: boolean
+        default: true
+      upload_patch:
+        description: '上传 offline-cache patch'
+        required: false
+        type: boolean
+        default: true
+      upload_endpoint:
+        description: '目标 endpoint (默认 http://192.168.1.8:3000/upload)'
+        required: false
+        type: string
+        default: 'http://192.168.1.8:3000/upload'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upload-to-3000-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    # workflow_run 触发时只有 completed 的事件；PR 闭合只在 closed + merged 时
+    if: |
+      (github.event_name == 'push') ||
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Remove Aliyun mirrors
+        run: sed -i '/maven.aliyun.com/d' settings.gradle
+
+      - name: Build APKs
+        id: build
+        run: |
+          chmod +x gradlew
+          # 只在 push / PR merged / dispatch 触发时才全量编；replay-offline-cache 触发时直接复用它的产物
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            echo "Skipping build (will reuse replay-offline-cache artifacts)"
+            exit 0
+          fi
+          ./gradlew --no-daemon --no-configuration-cache \
+            -PenableAbiSplits=true \
+            assembleAppDebug \
+            2>&1 | tee build-debug.log || true
+          ls -lh app/build/outputs/apk/debug/*.apk || true
+
+      - name: Collect APKs
+        id: collect_apks
+        run: |
+          mkdir -p artifacts
+          shopt -s nullglob
+          for f in app/build/outputs/apk/debug/*universal*.apk \
+                  app/build/outputs/apk/debug/*arm64-v8a*.apk \
+                  app/build/outputs/apk/debug/*armeabi-v7a*.apk; do
+            [ -f "$f" ] || continue
+            cp "$f" "artifacts/$(basename "$f")"
+          done
+          ls -lh artifacts/ || true
+          echo "collected=$(ls -1 artifacts | wc -l)" >> "$GITHUB_OUTPUT"
+
+      - name: Download APK artifacts from replay workflow
+        if: github.event_name == 'workflow_run'
+        uses: actions/download-artifact@v4
+        with:
+          name: legado-debug-replay
+          path: artifacts
+          merge-multiple: true
+
+      - name: Upload APK files
+        id: upload_apk
+        if: github.event_name != 'workflow_dispatch' || inputs.upload_apk
+        continue-on-error: true
+        env:
+          ENDPOINT: ${{ inputs.upload_endpoint || 'http://192.168.1.8:3000/upload' }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SHA: ${{ github.sha }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          shopt -s nullglob
+          apks=(artifacts/*.apk)
+          if [ "${#apks[@]}" -eq 0 ]; then
+            echo "::warning::No APK files to upload"
+            exit 0
+          fi
+          for f in "${apks[@]}"; do
+            echo "==> Uploading $(basename "$f")"
+            http_code=$(curl --silent --output /tmp/upload-resp \
+              --write-out "%{http_code}" \
+              -X POST \
+              -F "file=@${f}" \
+              -F "filename=$(basename "$f")" \
+              -F "repo=${REPO}" \
+              -F "run_id=${RUN_ID}" \
+              -F "sha=${SHA}" \
+              -F "event=${EVENT}" \
+              -F "category=apk" \
+              --max-time 600 \
+              --connect-timeout 20 \
+              "${ENDPOINT}" || echo "fail")
+            echo "    HTTP ${http_code} - $(cat /tmp/upload-resp 2>/dev/null | head -c 500)"
+            if [ "$http_code" != "200" ] && [ "$http_code" != "201" ] && [ "$http_code" != "204" ]; then
+              echo "::warning::upload failed for $(basename "$f") (HTTP ${http_code})"
+            fi
+          done
+
+      - name: Upload patch file
+        id: upload_patch
+        if: github.event_name != 'workflow_dispatch' || inputs.upload_patch
+        continue-on-error: true
+        env:
+          ENDPOINT: ${{ inputs.upload_endpoint || 'http://192.168.1.8:3000/upload' }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        run: |
+          patch_file=".github/patches/offline-cache-bookshelf-v1.patch"
+          if [ ! -f "$patch_file" ]; then
+            echo "::warning::patch file not found: $patch_file"
+            exit 0
+          fi
+          echo "==> Uploading patch file"
+          http_code=$(curl --silent --output /tmp/upload-resp \
+            --write-out "%{http_code}" \
+            -X POST \
+            -F "file=@${patch_file}" \
+            -F "filename=$(basename "$patch_file")" \
+            -F "repo=${REPO}" \
+            -F "run_id=${RUN_ID}" \
+            -F "sha=${SHA}" \
+            -F "category=patch" \
+            --max-time 60 \
+            --connect-timeout 20 \
+            "${ENDPOINT}" || echo "fail")
+          echo "    HTTP ${http_code} - $(cat /tmp/upload-resp 2>/dev/null | head -c 500)"
+          if [ "$http_code" != "200" ] && [ "$http_code" != "201" ] && [ "$http_code" != "204" ]; then
+            echo "::warning::patch upload failed (HTTP ${http_code})"
+          fi
+
+      - name: Upload other replays if any
+        id: upload_other
+        continue-on-error: true
+        env:
+          ENDPOINT: ${{ inputs.upload_endpoint || 'http://192.168.1.8:3000/upload' }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        run: |
+          shopt -s nullglob
+          other_files=(
+            .github/workflows/replay-offline-cache.yml
+            .github/scripts/apply-offline-cache-replay.sh
+            .github/REAPPLY_README.md
+            docs/dev/offline-cache-bookshelf-rework.md
+          )
+          for f in "${other_files[@]}"; do
+            [ -f "$f" ] || continue
+            echo "==> Uploading $(basename "$f")"
+            http_code=$(curl --silent --output /tmp/upload-resp \
+              --write-out "%{http_code}" \
+              -X POST \
+              -F "file=@${f}" \
+              -F "filename=$(basename "$f")" \
+              -F "repo=${REPO}" \
+              -F "run_id=${RUN_ID}" \
+              -F "sha=${SHA}" \
+              -F "category=replay-config" \
+              --max-time 60 \
+              --connect-timeout 20 \
+              "${ENDPOINT}" || echo "fail")
+            echo "    HTTP ${http_code} - $(cat /tmp/upload-resp 2>/dev/null | head -c 500)"
+          done
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Upload to 192.168.1.8:3000" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Endpoint: ${{ inputs.upload_endpoint || 'http://192.168.1.8:3000/upload' }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Event: ${{ github.event_name }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- SHA: \`${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::See workflow logs for per-file HTTP status codes"

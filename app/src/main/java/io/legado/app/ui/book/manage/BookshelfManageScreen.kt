@@ -217,12 +217,10 @@ private fun BookshelfManageScreen(
 
     val groupNameResolver: (Book) -> String = remember(userGroups, noGroupText) {
         { book ->
-            if (book.group <= 0L) {
+            if (book.groupId <= 0L) {
                 noGroupText
             } else {
-                val groups = userGroups.filter {
-                    (book.group and it.groupId) > 0L
-                }
+                val groups = userGroups.filter { it.groupId == book.groupId }
                 if (groups.isEmpty()) noGroupText
                 else groups.joinToString("、") { it.groupName }
             }
@@ -362,11 +360,11 @@ private fun BookshelfManageScreen(
     fun exportSelected() {
         showExportSheetFor(state.selectedBooks)
     }
-    fun resolveSelectionGroupMask(): Long {
+    fun resolveSelectionGroupId(): Long {
         val targetBooks = state.selectedBooks
         if (targetBooks.isEmpty()) return 0L
-        val firstGroup = targetBooks.first().group.coerceAtLeast(0L)
-        return if (targetBooks.all { it.group == firstGroup }) firstGroup else 0L
+        val firstGroup = targetBooks.first().groupId.coerceAtLeast(0L)
+        return if (targetBooks.all { it.groupId == firstGroup }) firstGroup else 0L
     }
     val fabItems = listOf(
         FabMenuItem(
@@ -410,7 +408,7 @@ private fun BookshelfManageScreen(
             stringResource(R.string.move_to_group)
         ) {
             if (selectedBookUrls.isNotEmpty()) {
-                groupPickerCurrentGroupId = resolveSelectionGroupMask()
+                groupPickerCurrentGroupId = resolveSelectionGroupId()
                 pendingMoveGroupBookUrl = null
                 showGroupSelectSheet = true
             }
@@ -693,7 +691,7 @@ private fun BookshelfManageScreen(
                                     SmallTonalButton(
                                         onClick = {
                                             pendingMoveGroupBookUrl = book.bookUrl
-                                            groupPickerCurrentGroupId = book.group.coerceAtLeast(0L)
+                                            groupPickerCurrentGroupId = book.groupId.coerceAtLeast(0L)
                                             showGroupSelectSheet = true
                                         },
                                         modifier = Modifier.weight(1f),

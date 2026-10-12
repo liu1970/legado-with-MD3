@@ -50,7 +50,7 @@ class AiToolRepository(
     private fun isReadable(bookUrl: String): Boolean {
         val facts = bookDao.privateFacts(bookUrl)
         return !facts.isPrivate ||
-                privateAccessGateway.isGrantedNow(bookUrl, facts.groupMask)
+                privateAccessGateway.isGrantedNow(bookUrl, facts.groupId)
     }
 
     private fun Book.isReadable(): Boolean = isReadable(bookUrl)

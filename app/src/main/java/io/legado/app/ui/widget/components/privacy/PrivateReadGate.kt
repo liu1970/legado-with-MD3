@@ -41,7 +41,7 @@ import org.koin.compose.viewmodel.koinViewModel
 data class PrivateReadGateUiState(
     val isChecking: Boolean = true,
     val bookUrl: String? = null,
-    val facts: PrivateBookFacts = PrivateBookFacts(isPrivate = false, groupMask = 0L),
+    val facts: PrivateBookFacts = PrivateBookFacts(isPrivate = false, groupId = 0L),
     val access: PrivateAccessState = PrivateAccessState(),
     val settings: PrivateAccessSettings = PrivateAccessSettings(),
 ) {
@@ -50,7 +50,7 @@ data class PrivateReadGateUiState(
     val isLocked: Boolean
         get() = !isChecking && bookUrl != null && facts.isPrivate &&
                 settings.verifyOnOpenBook &&
-                !access.isTargetGranted(bookUrl, facts.groupMask)
+                !access.isTargetGranted(bookUrl, facts.groupId)
 }
 
 sealed interface PrivateReadGateEffect {

@@ -163,6 +163,8 @@
     <string name="offline_cache">Offline cache</string>
     <string name="offline_cache_t">Offline cache</string>
     <string name="offline_cache_s">Cache the selected chapter(s) to Storage</string>
+    <string name="offline_cache_started">Queued %1$d chapters for offline cache</string>
+    <string name="no_chapter_to_cache">No chapters to cache</string>
     <string name="change_origin">Change Origin</string>
     <string name="about_description">
         \u3000\u3000 This is an open source reading software newly developed by Kotlin, welcome to join us.

@@ -64,7 +64,7 @@ fun GroupEditSheet(
     AppModalBottomSheet(
         show = show,
         onDismissRequest = onDismissRequest,
-        startAction = if (group != null && (group.groupId > 0 || group.groupId == Long.MIN_VALUE)) {
+        startAction = if (group != null && canDeleteGroup(group)) {
             {
                 GroupDeleteAction(
                     group = group,
@@ -384,3 +384,21 @@ fun GroupResetCoverAction(
         contentDescription = stringResource(R.string.reset),
     )
 }
+
+/**
+ * 是否允许在分组管理/编辑菜单中显示删除按钮。
+ *
+ * 规则：
+ * - 用户自定义分组（groupId > 0）：一直允许。
+ * - Long.MIN_VALUE（系统保留位）：允许。
+ * - 其他负数预设（IdRoot/IdLocal/IdAudio/IdNetNone/IdLocalNone/IdManga/IdText/IdError/IdReading
+ *   /IdUnread/IdReadFinished*）：允许分组名但 IdAll 是"全部"兜底，禁止删。
+ *
+ * 删除只清空 book_groups 行：BookDao 里按 kind/type 字段的查询（IdNetNone/IdLocalNone/
+ * IdManga/IdText/IdError/IdReading/IdUnread/IdReadFinished*）都不依赖该表中的行，
+ * 因此删除这些行不会破坏书架头部 tab 的筛选。
+ */
+private fun canDeleteGroup(group: BookGroup): Boolean =
+    group.groupId > 0L ||
+            group.groupId == Long.MIN_VALUE ||
+            (group.groupId < 0L && group.groupId != BookGroup.IdAll)

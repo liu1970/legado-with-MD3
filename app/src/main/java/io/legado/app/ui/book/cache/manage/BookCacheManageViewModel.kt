@@ -59,7 +59,7 @@ data class BookCacheBookItem(
     val pausedCount: Int,
     val errorCount: Int,
     val isNotShelf: Boolean,
-    val group: Long,
+    val groupId: Long,
 ) {
     val progress: Float get() = if (totalCount == 0) 0f else cachedCount.toFloat() / totalCount
     val hasActiveDownload: Boolean get() = waitingCount > 0 || downloadingCount > 0
@@ -469,7 +469,7 @@ class BookCacheManageViewModel(
             pausedCount = pausedCount,
             errorCount = errorIndices.size,
             isNotShelf = book.isNotShelf,
-            group = book.group,
+            groupId = book.groupId,
         )
     }
 

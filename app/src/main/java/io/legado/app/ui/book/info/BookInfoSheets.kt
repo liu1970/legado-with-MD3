@@ -142,26 +142,20 @@ fun GroupSelectSheet(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(groups, key = { it.groupId }) { group ->
-                    val isSelected = (selectedGroupId and group.groupId) != 0L
+                    // 一本书只能在一个书架里：single-id 等值比较，原来的位运算已不再适用。
+                    val isSelected = selectedGroupId == group.groupId
                     SelectionItemCard(
                         title = group.groupName,
                         isSelected = isSelected,
                         onToggleSelection = {
-                            selectedGroupId = if (isSelected) {
-                                selectedGroupId - group.groupId
-                            } else {
-                                selectedGroupId + group.groupId
-                            }
+                            // 单选：选谁就归这条已入书架。
+                            selectedGroupId = if (isSelected) 0L else group.groupId
                         },
                         leadingContent = {
                             AppCheckbox(
                                 checked = isSelected,
-                                onCheckedChange = {
-                                    selectedGroupId = if (it) {
-                                        selectedGroupId + group.groupId
-                                    } else {
-                                        selectedGroupId - group.groupId
-                                    }
+                                onCheckedChange = { checked ->
+                                    selectedGroupId = if (checked) group.groupId else 0L
                                 }
                             )
                         },

@@ -130,7 +130,9 @@ fun GroupManageSheet(
         onDismissRequest = onDismissRequest,
         title = if (!isEditing) stringResource(R.string.group_manage) else stringResource(R.string.group_edit),
         startAction = editingGroup?.takeIf {
-            isEditing && (it.groupId > 0 || it.groupId == Long.MIN_VALUE)
+            isEditing && (it.groupId > 0 ||
+                    it.groupId == Long.MIN_VALUE ||
+                    (it.groupId < 0L && it.groupId != io.legado.app.data.entities.BookGroup.IdAll))
         }?.let { group ->
             {
                 GroupDeleteAction(

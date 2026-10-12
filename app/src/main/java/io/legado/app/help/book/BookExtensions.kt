@@ -481,16 +481,13 @@ fun applyTagGroupRules(
     val updatedBooks = mutableListOf<Book>()
     for (book in books) {
         val kinds = book.getDisplayTagList()
-        var newGroupMask = 0L
-        for ((rule, regex) in compiledRules) {
-            if (kinds.any { regex.containsMatchIn(it) }) {
-                newGroupMask = newGroupMask or (groupCache[rule.groupName] ?: 0L)
-            }
+        // groupId 改为单一 ID：多条规则同时命中，只把书归到第一个命中的分组。
+        // 原位掩码语义已被移除。
+        val matchedGroupId = compiledRules.firstNotNullOfOrNull { (rule, regex) ->
+            if (kinds.any { regex.containsMatchIn(it) }) groupCache[rule.groupName] else null
         }
-        // Tag rules only add matching groups; manually assigned groups are preserved.
-        val finalGroup = book.group or newGroupMask
-        if (book.group != finalGroup) {
-            book.group = finalGroup
+        if (matchedGroupId != null && matchedGroupId != book.groupId) {
+            book.groupId = matchedGroupId
             updatedBooks.add(book)
         }
     }
@@ -534,15 +531,11 @@ fun applyTagGroupRulesForBook(book: Book) {
     }
 
     val kinds = book.getDisplayTagList()
-    var newGroupMask = 0L
-    for ((rule, regex) in compiledRules) {
-        if (kinds.any { regex.containsMatchIn(it) }) {
-            newGroupMask = newGroupMask or (groupCache[rule.groupName] ?: 0L)
-        }
+    val matchedGroupId = compiledRules.firstNotNullOfOrNull { (rule, regex) ->
+        if (kinds.any { regex.containsMatchIn(it) }) groupCache[rule.groupName] else null
     }
-    val finalGroup = book.group or newGroupMask
-    if (book.group != finalGroup) {
-        book.group = finalGroup
+    if (matchedGroupId != null && matchedGroupId != book.groupId) {
+        book.groupId = matchedGroupId
     }
 }
 
@@ -578,7 +571,7 @@ fun Book.updateTo(newBook: Book): Book {
     newBook.durChapterTitle = durChapterTitle
     newBook.durChapterPos = durChapterPos
     newBook.durChapterTime = durChapterTime
-    newBook.group = group
+    newBook.groupId = groupId
     newBook.order = order
     newBook.customCoverUrl = customCoverUrl
     newBook.customIntro = customIntro
@@ -652,7 +645,7 @@ fun Book.getExportFileName(
             val field = when {
                 inside.equals("name", ignoreCase = true) -> name
                 inside.equals("author", ignoreCase = true) -> getRealAuthor()
-                inside.equals("group", ignoreCase = true) -> group
+                inside.equals("group", ignoreCase = true) -> groupId
                 inside.equals("source", ignoreCase = true) -> originName
                 inside.equals("remark", ignoreCase = true) -> remark
                 else -> null

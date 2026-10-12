@@ -67,7 +67,7 @@ class PrivateReadGateViewModel(
             val url = bookUrl?.takeIf { it.isNotEmpty() }
                 ?: bookRepository.getLastReadBook()?.bookUrl
             val facts = url?.let { privateContentGateway.factsOf(it) }
-                ?: PrivateBookFacts(isPrivate = false, groupMask = 0L)
+                ?: PrivateBookFacts(isPrivate = false, groupId = 0L)
             _uiState.update { it.copy(isChecking = false, bookUrl = url, facts = facts) }
         }
     }

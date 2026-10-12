@@ -1,0 +1,218 @@
+# 自动 reapply offcache + 书架/分组 改造
+#
+# 拉取上游后，自动应用本次改动并跑编译验证：
+#   1) checkout
+#   3) 拉上游 + 本地 rebase origin/main
+#   4) 跑 .github/scripts/apply-offline-cache-replay.sh (apply patch + build verify)
+#   5) 成功 → 自动 commit + 开 PR "chore(replay): reapply offcache + 书架改造"
+#   6) 失败 → 不 commit，开 "auto-rebase failed" PR 提示手动解决
+#
+# 手动触发：
+#   - workflow_dispatch（输入 apply_now: true）
+#   - schedule: 每天 16:00 UTC（与 autoupdatefork 错开 2h，0点任务先无重叠时间）
+#
+# 不要把这个 workflow 接入 push 触发器：
+# push 时若上游还没 sync，这个 workflow 会抢跑把脏改动推到 main。
+
+name: Reapply offcache + 书架改造
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply_now:
+        description: '立即强制 rebase + apply patch（忽略会拉取上游）'
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    - cron: '0 18 * * *'  # 每天 02:00 北京时间
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: replay-offcache-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    if: github.event.repository.owner.id == github.event.sender.id && github.actor != 'gedoor'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config --global user.email "github-actions@github.com"
+          git config --global user.name "github-actions"
+          git config --global core.fileMode false
+
+      - name: Fetch upstream and rebase
+        run: |
+          if [ "${{ inputs.apply_now }}" = "true" ]; then
+            echo "apply_now=true: skipping upstream fetch"
+            exit 0
+          fi
+          git remote add upstream https://github.com/HapeLee/legado-with-MD3.git 2>/dev/null || true
+          # 仅当上游 remote 存在时才拉（仓库是 fork 时；如果是上游仓库本身则跳过）
+          if git remote get-url upstream > /dev/null 2>&1; then
+            git fetch upstream
+            if git rev-parse upstream/main > /dev/null 2>&1; then
+              echo "Rebasing onto upstream/main"
+              if ! git rebase upstream/main; then
+                echo "ERROR: rebase onto upstream/main failed"
+                echo "Please resolve conflicts manually."
+                git rebase --abort || true
+                exit 1
+              fi
+            else
+              echo "WARN: upstream/main branch not found, skipping rebase"
+            fi
+          else
+            echo "WARN: upstream remote not configured, skipping rebase"
+          fi
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Remove Aliyun mirrors
+        run: sed -i '/maven.aliyun.com/d' settings.gradle
+
+      - name: Apply patch + run replay
+        id: replay
+        run: bash .github/scripts/replay-offline-cache.sh
+
+      - name: Verify architecture + compile
+        if: steps.replay.outcome == 'success'
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --no-configuration-cache \
+            verifyConfigArchitecture :app:compileAppDebugKotlin
+
+      - name: Open PR with changes
+        uses: actions/github-script@v7
+        if: steps.replay.outcome == 'success'
+        with:
+          script: |
+            const branch = 'replay/offcache-' + Date.now();
+            await github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'refs/heads/' + branch,
+              sha: context.sha,
+            });
+            await github.rest.repos.createCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              message: 'replay: reapply offcache + 书架改造 on top of upstream/main',
+              tree: context.sha,
+              parents: [context.sha],
+            });
+
+            const { data: pr } = await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '🔁 replay: reapply offcache + 书架改造',
+              head: branch,
+              base: context.ref.replace('refs/heads/', ''),
+              body: [
+                '## 自动 reapply',
+                '',
+                '本次 commit 由 `replay-offline-cache` workflow 自动生成，',
+                '把 `.github/patches/offline-cache-bookshelf-v1.patch` 套到当前 main 上。',
+                '',
+                '**编译/护栏已通过**（见 workflow run）。',
+                '',
+                '合并后会自动接入：',
+                '- 详情页"离线缓存"按钮',
+                '- 详情页/书籍元信息（Book） → 单一书架 ID',
+                '- 详情页选组 Sheet 单选（原位掩码 XOR 改为单选）',
+                '- 其他负数书架预设可删除',
+                '',
+                '---',
+                '# 改动文档',
+                '',
+                '请同时阅读 `docs/dev/offline-cache-bookshelf-rework.md`。',
+              ].join('\n'),
+            });
+            core.setOutput('pr_url', pr.html_url);
+            core.notice(`PR: ${pr.html_url}`);
+
+      - name: Upload APK artifact
+        if: steps.replay.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: legado-debug-replay
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
+
+      - name: Open "auto-rebase failed" PR
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const branch = 'replay-failed-' + Date.now();
+            await github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'refs/heads/' + branch,
+              sha: context.sha,
+            });
+
+            await github.rest.repos.createCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              message: 'replay: failed; needs manual intervention',
+              tree: context.sha,
+              parents: [context.sha],
+            });
+
+            const log = await core.getInput('log', { default: '' }) ||
+                       'Check the workflow run logs at ' + context.payload.head_repository.run_url;
+
+            const { data: pr } = await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '❌ replay failed: manual rebase needed',
+              head: branch,
+              base: context.ref.replace('refs/heads/', ''),
+              body: [
+                '## ❌ 自动 replay 失败',
+                '',
+                '自动应用 `offline-cache-bookshelf-v1.patch` 失败（可能是 patch 与上游代码冲突，或编译未通过）。',
+                '',
+                '### 手动处理步骤',
+                '',
+                '1. 拉取此 PR 的 branch 到本地：',
+                '   ```bash',
+                '   git fetch origin ' + branch,
+                '   git checkout ' + branch,
+                '   ```',
+                '2. 解决冲突（patch 与上游代码的 hunk 调用）。',
+                '3. 重跑 `./gradlew verifyConfigArchitecture :app:compileAppDebugKotlin`',
+                '4. 推送：',
+                '   ```bash',
+                '   git push origin ' + branch,
+                '   ```',
+                '',
+                '### 参考',
+                '',
+                '- `docs/dev/offline-cache-bookshelf-rework.md` 列出所有改动点',
+                '- `.github/patches/offline-cache-bookshelf-v1.patch` 是 patch 本体',
+                '',
+                '### Workflow run logs',
+                context.payload.head_repository.run_url || '(no run url)',
+              ].join('\n'),
+            });
+            core.notice(`Failure PR: ${pr.html_url}`);

@@ -136,7 +136,7 @@ val appDb by lazy {
 }
 
 @Database(
-    version = 130,
+    version = 131,
     exportSchema = true,
     entities = [Book::class, BookGroup::class, BookSource::class, BookChapter::class,
         ReplaceRule::class, SearchBook::class, SearchKeyword::class, Cookie::class,
@@ -273,6 +273,9 @@ val appDb by lazy {
         AutoMigration(from = 128, to = 129),
         // regex_cast_rules 新增 voiceEffect 列：命中的那段文字用哪个变声器预设念，默认空 = 不变声
         AutoMigration(from = 129, to = 130),
+        // 130 → 131 由 DatabaseMigrations.migration_130_131 手工整表重建：
+        // books.group 位掩码 → books.groupId 单一书架 ID，多位掩码收敛到最低位。
+        // SQLite 在 minSdk 26 上没有 RENAME COLUMN / DROP COLUMN，AutoMigration 不支持列重命名。
     ]
 )
 abstract class AppDatabase : RoomDatabase() {

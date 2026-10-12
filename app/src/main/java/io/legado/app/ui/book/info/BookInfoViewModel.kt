@@ -46,6 +46,7 @@ import io.legado.app.domain.model.settings.ThemeSettings
 import io.legado.app.domain.usecase.BookTocUnavailableException
 import io.legado.app.domain.usecase.ChangeBookSourceUseCase
 import io.legado.app.domain.usecase.ChangeSourceMigrationOptions
+import io.legado.app.domain.usecase.CacheBookChaptersUseCase
 import io.legado.app.domain.usecase.ClearBookCacheUseCase
 import io.legado.app.domain.usecase.FindBookshelfConflictUseCase
 import io.legado.app.domain.usecase.ResolveBookshelfConflictUseCase
@@ -63,6 +64,7 @@ import io.legado.app.help.book.parseHighlightedTags
 import io.legado.app.help.book.removeType
 import io.legado.app.help.book.upKind
 import io.legado.app.help.book.updateTo
+import io.legado.app.help.config.BookshelfLastAddedStore
 import io.legado.app.help.config.LocalConfig
 import io.legado.app.help.coroutine.Coroutine
 import io.legado.app.lib.webdav.ObjectNotFoundException
@@ -114,6 +116,7 @@ class BookInfoViewModel(
     private val readRecordRepository: ReadRecordRepository,
     private val changeBookSourceUseCase: ChangeBookSourceUseCase,
     private val clearBookCacheUseCase: ClearBookCacheUseCase,
+    private val cacheBookChaptersUseCase: CacheBookChaptersUseCase,
     private val bookGroupRepository: BookGroupRepository,
     private val bookRepository: BookRepository,
     private val findBookshelfConflictUseCase: FindBookshelfConflictUseCase,
@@ -169,11 +172,11 @@ class BookInfoViewModel(
     }.combine(privateAccessState) { screen, privateAccess ->
         screen.copy(privateAccess = privateAccess)
     }.combine(privateAccessSettings) { screen, privateSettings ->
-        val group = screen.book?.group ?: 0L
+        val groupId = screen.book?.groupId ?: 0L
         screen.copy(
             privateLocked = privateSettings.verifyOnOpenBook &&
                     screen.privateLockedByEntry &&
-                    !screen.privateAccess.isTargetGranted(screen.book?.bookUrl, group)
+                    !screen.privateAccess.isTargetGranted(screen.book?.bookUrl, groupId)
         )
     }.stateIn(
         scope = viewModelScope,
@@ -431,6 +434,7 @@ class BookInfoViewModel(
             }
 
             BookInfoIntent.ReadClick -> onReadClick()
+            BookInfoIntent.OfflineCacheClick -> onOfflineCacheClick()
             BookInfoIntent.ShelfClick -> onShelfClick()
             BookInfoIntent.TocClick -> onTocClick()
             BookInfoIntent.CoverClick -> setSheet(BookInfoSheet.CoverPicker)
@@ -958,6 +962,9 @@ class BookInfoViewModel(
         }
         currentBook = book
         inBookshelf = true
+        // 入架成功 → 记录目标书架，供后续"未入架书的离线缓存"沿用同一选择。
+        // 只看用户当前选择（group>0 时），避免把 0L（"全部"）和 Long.MIN_VALUE 等预设误记。
+        BookshelfLastAddedStore.recordLastAdded(book.groupId)
         // 入架后按钮语义变了（点击=「书架操作」Sheet），副本要按新状态重算：共存会多一本、迁移会少一本
         invalidateShelfDuplicates()
         syncUiState()
@@ -1276,10 +1283,9 @@ class BookInfoViewModel(
         execute {
             val kindBefore = book.kind
             book.upKind()
-            val userGroupIds = bookGroupRepository.getIdsSum()
-            val groupAnd = userGroupIds and book.group
-            val hasCustomGroup = book.group > 0L && groupAnd != 0L
-            val groupNames = bookGroupRepository.getGroupNames(book.group).joinToString(",")
+            // groupId 是单一 ID 后，"是否属于用户自定义书架" = groupId > 0L
+            val hasCustomGroup = book.groupId > 0L
+            val groupNames = bookGroupRepository.getGroupNames(book.groupId).joinToString(",")
             val normalizedGroupNames = groupNames.ifBlank { null }
             // 只有 upKind 真改写出过差异才落库：全行写会失效书架查询，让正在播形变转场的
             // 书架整屏重组（同一口径见 ReadBookLoadDelegate.initData）。
@@ -1394,6 +1400,50 @@ class BookInfoViewModel(
         }
     }
 
+    /**
+     * 详情页「离线缓存」按钮：先保证书在书架上，再用整本章节范围走缓存。
+     *
+     * 入架是单一动作：未入架时按"上次加入的书架"（无记录则 IdAll）入架，再缓存；
+     * 不与冲突 Sheet 走同一路径——离线缓存走冲突 Sheet 会让用户以为缓存本身要决策，
+     * 但缓存只是写盘，不影响书架结构。
+     */
+    private fun onOfflineCacheClick() {
+        val book = currentBook ?: return
+        execute {
+            if (inBookshelf) {
+                startOfflineCache(book.bookUrl)
+            } else {
+                addToDefaultBookshelfThenCache(book)
+            }
+        }.onError {
+            showMessage(it.localizedMessage ?: "操作失败")
+        }
+    }
+
+    private suspend fun addToDefaultBookshelfThenCache(book: Book) {
+        val targetGroupId = BookshelfLastAddedStore.lastAddedGroupIdOrDefault()
+        prepareBookForShelf(book)
+        book.groupId = targetGroupId
+        book.save()
+        SourceCallBack.callBackBook(SourceCallBack.ADD_BOOK_SHELF, bookSource, book)
+        bookRepository.insertChapters(*currentChapterList.toTypedArray())
+        // 先把 host 状态切到"已入架"，再写偏好；这样 applyBookOnShelf 不会重复覆盖 recordLastAdded
+        // （applyBookOnShelf 也写，但两个写入同一 groupId 是幂等的）。
+        applyBookOnShelf(book)
+        BookshelfLastAddedStore.recordLastAdded(targetGroupId)
+        startOfflineCache(book.bookUrl)
+    }
+
+    private suspend fun startOfflineCache(bookUrl: String) {
+        val chapterIndices = currentChapterList.map { it.index }.distinct()
+        if (chapterIndices.isEmpty()) {
+            showMessage(context.getString(R.string.no_chapter_to_cache))
+            return
+        }
+        val count = cacheBookChaptersUseCase.execute(bookUrl, chapterIndices)
+        showMessage(context.getString(R.string.offline_cache_started, count))
+    }
+
     private fun onShelfClick() {
         val book = currentBook ?: return
         if (inBookshelf) {
@@ -1446,7 +1496,7 @@ class BookInfoViewModel(
 
     private fun updateGroup(groupId: Long) {
         currentBook?.let { book ->
-            book.group = groupId
+            book.groupId = groupId
             currentGroupNames = null
             currentHasCustomGroup = false
             refreshMeta(book)
@@ -2077,7 +2127,7 @@ class BookInfoViewModel(
             origin = origin,
             originName = originName,
             coverPath = getDisplayCover(),
-            group = group,
+            groupId = groupId,
             isLocal = isLocal,
             type = type,
             canUpdate = canUpdate,

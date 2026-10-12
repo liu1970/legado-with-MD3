@@ -30,6 +30,9 @@ interface BookGroupDao {
     @get:Query("SELECT sum(groupId) FROM book_groups where groupId >= 0")
     val idsSum: Long
 
+    @get:Query("SELECT MAX(groupId) FROM book_groups where groupId > 0")
+    val maxGroupId: Long
+
     @get:Query("SELECT MAX(`order`) FROM book_groups where groupId >= 0")
     val maxOrder: Int
 
@@ -42,7 +45,7 @@ interface BookGroupDao {
     @Query("update book_groups set show = 1 where groupId = :groupId")
     fun enableGroup(groupId: Long)
 
-    @Query("select groupName from book_groups where groupId > 0 and (groupId & :id) > 0")
+    @Query("select groupName from book_groups where groupId = :id")
     fun getGroupNames(id: Long): List<String>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -68,19 +71,12 @@ interface BookGroupDao {
     @Query("UPDATE book_groups SET cover = NULL WHERE groupId = :groupId")
     fun clearCover(groupId: Long)
 
-    fun isInRules(id: Long): Boolean {
-        if (id < 0) {
-            return true
-        }
-        return id and (id - 1) == 0L
-    }
-
+    /**
+     * groupId 是 single-id 后，新分支用 [maxGroupId] + 1 取下一个未用 ID；
+     * `canAddGroup` 仍以"总数 < 64"为上限，保证个人书架数量不会无限扩张。
+     */
     fun getUnusedId(): Long {
-        var id = 1L
-        val idsSum = idsSum
-        while (id and idsSum != 0L) {
-            id = id.shl(1)
-        }
-        return id
+        val max = maxGroupId
+        return max + 1L
     }
 }

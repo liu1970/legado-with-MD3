@@ -47,7 +47,7 @@ fun rememberPrivateLockedBookUrls(bookUrls: List<String>): Set<String> {
         } else {
             bookUrls.filterTo(mutableSetOf()) { url ->
                 val itemFacts = facts[url] ?: return@filterTo false
-                itemFacts.isPrivate && !access.isTargetGranted(url, itemFacts.groupMask)
+                itemFacts.isPrivate && !access.isTargetGranted(url, itemFacts.groupId)
             }
         }
     }
@@ -89,7 +89,7 @@ fun rememberPrivateLockedRecords(records: List<PrivateRecordKey>): Set<PrivateRe
         } else {
             records.filterTo(mutableSetOf()) { key ->
                 val itemFacts = facts[key] ?: return@filterTo false
-                itemFacts.isPrivate && !access.isTargetGranted(null, itemFacts.groupMask)
+                itemFacts.isPrivate && !access.isTargetGranted(null, itemFacts.groupId)
             }
         }
     }

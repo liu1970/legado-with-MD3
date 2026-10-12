@@ -89,7 +89,7 @@ data class BookInfoBookUi(
     val origin: String,
     val originName: String,
     val coverPath: String?,
-    val group: Long,
+    val groupId: Long,
     val isLocal: Boolean,
     val type: Int,
     val canUpdate: Boolean,
@@ -210,6 +210,13 @@ sealed interface BookInfoIntent {
     data object ChangeSourceClick : BookInfoIntent
     data object ReadRecordClick : BookInfoIntent
     data object RemarkClick : BookInfoIntent
+    /**
+     * 触发离线缓存：
+     * - 未入架 → 先入架到"最近加入的书架"（无记录则 IdAll），再走缓存；
+     * - 已入架 → 直接走缓存。
+     * 处理过程应避免向用户抛出"先加书架"之类引导——这是单一动作。
+     */
+    data object OfflineCacheClick : BookInfoIntent
     data class SaveCover(val path: String) : BookInfoIntent
     data class UpdateRemark(val remark: String) : BookInfoIntent
     data class SelectGroup(val groupId: Long) : BookInfoIntent

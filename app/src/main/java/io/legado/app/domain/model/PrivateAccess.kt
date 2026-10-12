@@ -91,17 +91,20 @@ data class PrivateAccessState(
  * 私密判定的唯一实现：单本标记 ∪ 所属私密分组。
  *
  * 纯函数，便于单测；数据层与 UI 都只复用它，避免长出第二套判定。
+ *
+ * `privateGroupIds` 是当前所有私密分组的 ID 集合（groupId 是 single-id 后
+ * 不再做位掩码 OR）；任一私密分组命中即视为私密。
  */
 fun isPrivateBook(
     bookUrl: String,
-    group: Long,
+    groupId: Long,
     privateBookUrls: Set<String>,
-    privateGroupMask: Long,
+    privateGroupIds: Set<Long>,
 ): Boolean = bookUrl in privateBookUrls ||
-        (privateGroupMask != 0L && (group and privateGroupMask) != 0L)
+        (groupId in privateGroupIds)
 
 /**
- * 一本书的私密事实：是否私密 + 所属分组位掩码。
+ * 一本书的私密事实：是否私密 + 所属书架 ID（single-id）。
  *
  * 中心 gate（阅读器路由入口）只拿得到一个 bookUrl，需要这两项才能复用
  * [PrivateAccessState.isTargetGranted] 的分组授权语义——否则"刚在书架解锁了私密分组"
@@ -109,7 +112,7 @@ fun isPrivateBook(
  */
 data class PrivateBookFacts(
     val isPrivate: Boolean,
-    val groupMask: Long,
+    val groupId: Long,
 )
 
 sealed interface PrivateUnlockTarget {

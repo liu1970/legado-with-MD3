@@ -24,14 +24,21 @@ data class GroupBookCount(
     val count: Int
 )
 
-private const val PRIVATE_GROUP_MASK =
-    "(SELECT COALESCE(SUM(groupId), 0) FROM book_groups WHERE groupId > 0 AND isPrivate = 1)"
+private const val PRIVATE_GROUP_IDS =
+    "(SELECT groupId FROM book_groups WHERE groupId > 0 AND isPrivate = 1)"
 
-private const val PUBLIC_GROUP_MASK =
-    "(SELECT COALESCE(SUM(groupId), 0) FROM book_groups WHERE groupId > 0 AND isPrivate = 0)"
+private const val PUBLIC_GROUP_IDS =
+    "(SELECT groupId FROM book_groups WHERE groupId > 0 AND isPrivate = 0)"
 
+// 一本书属于私密分组（个人敏感列表）= groupId 是私密分组之一。
+// 等价于旧的位掩码 `group & PRIVATE_GROUP_MASK != 0`，但 groupId 已经是 single-id，
+// 直接比较即可。
+private const val IN_PRIVATE_GROUP =
+    "`groupId` IN $PRIVATE_GROUP_IDS"
+
+// 公开发布过滤：book.groupId = 0（未入架 / "全部"） OR 不在任何私密分组里。
 private const val PUBLIC_BOOK_FILTER =
-    "(`group` = 0 OR (`group` & $PRIVATE_GROUP_MASK) = 0)"
+    "(`groupId` = 0 OR NOT ($IN_PRIVATE_GROUP))"
 
 @Dao
 interface BookDao {
@@ -84,7 +91,7 @@ interface BookDao {
         """
         select * from books where type & ${BookType.text} > 0
         and type & ${BookType.local} = 0
-        and ($PUBLIC_GROUP_MASK & `group`) = 0
+        and `groupId` NOT IN $PUBLIC_GROUP_IDS
         and $PUBLIC_BOOK_FILTER
         and (select show from book_groups where groupId = ${BookGroup.IdNetNone}) != 1
         """
@@ -110,7 +117,7 @@ interface BookDao {
             totalChapterNum,
             durChapterIndex,
             type,
-            `group`,
+            `groupId`,
             `order`,
             canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro,
@@ -120,7 +127,7 @@ interface BookDao {
         FROM books 
         where type & ${BookType.text} > 0
         and type & ${BookType.local} = 0
-        and ($PUBLIC_GROUP_MASK & `group`) = 0
+        and `groupId` NOT IN $PUBLIC_GROUP_IDS
         and $PUBLIC_BOOK_FILTER
         and (select show from book_groups where groupId = ${BookGroup.IdNetNone}) != 1
         """
@@ -152,7 +159,7 @@ interface BookDao {
         totalChapterNum,
         durChapterIndex,
         type,
-        `group`,
+        `groupId`,
         `order`,
         canUpdate,
         ifnull(customIntro, ifnull(listIntro, intro)) as intro,
@@ -188,7 +195,7 @@ interface BookDao {
             totalChapterNum,
             durChapterIndex,
             type,
-            `group`,
+            `groupId`,
             `order`,
             canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro,
@@ -224,7 +231,7 @@ interface BookDao {
             totalChapterNum,
             durChapterIndex,
             type,
-            `group`,
+            `groupId`,
             `order`,
             canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro,
@@ -241,7 +248,7 @@ interface BookDao {
     @Query(
         """
         select * from books where type & ${BookType.audio} = 0 and type & ${BookType.local} = 0
-        and ((SELECT sum(groupId) FROM book_groups where groupId > 0) & `group`) = 0
+        and `groupId` NOT IN (SELECT groupId FROM book_groups WHERE groupId > 0)
         """
     )
     fun flowNetNoGroup(): Flow<List<Book>>
@@ -265,7 +272,7 @@ interface BookDao {
             totalChapterNum,
             durChapterIndex,
             type,
-            `group`,
+            `groupId`,
             `order`,
             canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro,
@@ -274,7 +281,7 @@ interface BookDao {
             wordCount
         FROM books 
         where type & ${BookType.audio} = 0 and type & ${BookType.local} = 0
-        and ($PUBLIC_GROUP_MASK & `group`) = 0
+        and `groupId` NOT IN $PUBLIC_GROUP_IDS
         and $PUBLIC_BOOK_FILTER
         """
     )
@@ -283,7 +290,7 @@ interface BookDao {
     @Query(
         """
         select * from books where type & ${BookType.local} > 0
-        and ((SELECT sum(groupId) FROM book_groups where groupId > 0) & `group`) = 0
+        and `groupId` NOT IN (SELECT groupId FROM book_groups WHERE groupId > 0)
         """
     )
     fun flowLocalNoGroup(): Flow<List<Book>>
@@ -307,7 +314,7 @@ interface BookDao {
             totalChapterNum,
             durChapterIndex,
             type,
-            `group`,
+            `groupId`,
             `order`,
             canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro,
@@ -316,13 +323,13 @@ interface BookDao {
             wordCount
         FROM books 
         where type & ${BookType.local} > 0
-        and ($PUBLIC_GROUP_MASK & `group`) = 0
+        and `groupId` NOT IN $PUBLIC_GROUP_IDS
         and $PUBLIC_BOOK_FILTER
         """
     )
     fun flowBookShelfLocalNoGroup(): Flow<List<BookShelfItem>>
 
-    @Query("SELECT * FROM books WHERE (`group` & :group) > 0")
+    @Query("SELECT * FROM books WHERE `groupId` = :group")
     fun flowByUserGroup(group: Long): Flow<List<Book>>
 
     @Query(
@@ -344,7 +351,7 @@ interface BookDao {
             totalChapterNum,
             durChapterIndex,
             type,
-            `group`,
+            `groupId`,
             `order`,
             canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro,
@@ -352,7 +359,7 @@ interface BookDao {
             customTag,
             wordCount
         FROM books 
-        WHERE (`group` & :group) > 0
+        WHERE `groupId` = :group
         AND ((SELECT isPrivate FROM book_groups WHERE groupId = :group) = 1 OR $PUBLIC_BOOK_FILTER)
         """
     )
@@ -382,7 +389,7 @@ interface BookDao {
             totalChapterNum,
             durChapterIndex,
             type,
-            `group`,
+            `groupId`,
             `order`,
             canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro,
@@ -419,7 +426,7 @@ interface BookDao {
             totalChapterNum,
             durChapterIndex,
             type,
-            `group`,
+            `groupId`,
             `order`,
             canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro,
@@ -456,7 +463,7 @@ interface BookDao {
             totalChapterNum,
             durChapterIndex,
             type,
-            `group`,
+            `groupId`,
             `order`,
             canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro,
@@ -492,7 +499,7 @@ interface BookDao {
             totalChapterNum,
             durChapterIndex,
             type,
-            `group`,
+            `groupId`,
             `order`,
             canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro,
@@ -530,7 +537,7 @@ interface BookDao {
             totalChapterNum,
             durChapterIndex,
             type,
-            `group`,
+            `groupId`,
             `order`,
             canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro,
@@ -568,7 +575,7 @@ interface BookDao {
             totalChapterNum,
             durChapterIndex,
             type,
-            `group`,
+            `groupId`,
             `order`,
             canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro,
@@ -604,7 +611,7 @@ interface BookDao {
             totalChapterNum,
             durChapterIndex,
             type,
-            `group`,
+            `groupId`,
             `order`,
             canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro,
@@ -640,7 +647,7 @@ interface BookDao {
             totalChapterNum,
             durChapterIndex,
             type,
-            `group`,
+            `groupId`,
             `order`,
             canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro,
@@ -676,7 +683,7 @@ interface BookDao {
             totalChapterNum,
             durChapterIndex,
             type,
-            `group`,
+            `groupId`,
             `order`,
             canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro,
@@ -690,7 +697,7 @@ interface BookDao {
     )
     fun flowBookShelfText(): Flow<List<BookShelfItem>>
 
-    @Query("SELECT * FROM books WHERE (`group` & :group) > 0")
+    @Query("SELECT * FROM books WHERE `groupId` = :group")
     fun getBooksByGroup(group: Long): List<Book>
 
     @Query("SELECT * FROM books WHERE `name` in (:names)")
@@ -842,11 +849,15 @@ interface BookDao {
     @Query("UPDATE books SET syncTime = :syncTime WHERE bookUrl = :bookUrl AND syncTime < :syncTime")
     fun upSyncTime(bookUrl: String, syncTime: Long)
 
-    @Query("update books set `group` = :newGroupId where `group` = :oldGroupId")
+    @Query("update books set `groupId` = :newGroupId where `groupId` = :oldGroupId")
     fun upGroup(oldGroupId: Long, newGroupId: Long)
 
-    @Query("update books set `group` = `group` - :group where `group` & :group > 0")
-    fun removeGroup(group: Long)
+    /**
+     * 删除分组时把所有在这本书里属于该 groupId 的书"复位"为 IdAll。
+     * 不再用旧 `group - mask` 位运算（groupId 是 single-id，没有掩码）。
+     */
+    @Query("update books set `groupId` = ${BookGroup.IdAll} where `groupId` = :groupId")
+    fun removeGroup(groupId: Long)
 
     @Query("delete from books where type & ${BookType.notShelf} > 0")
     fun deleteNotShelfBook()
@@ -861,18 +872,18 @@ interface BookDao {
         SELECT ${BookGroup.IdAll} AS groupId, COUNT(*) AS count FROM books WHERE $PUBLIC_BOOK_FILTER
         UNION ALL SELECT ${BookGroup.IdRoot}, COUNT(*) FROM books
             WHERE type & ${BookType.text} > 0 AND type & ${BookType.local} = 0
-            AND ($PUBLIC_GROUP_MASK & `group`) = 0
+            AND `groupId` NOT IN $PUBLIC_GROUP_IDS
             AND $PUBLIC_BOOK_FILTER
             AND (SELECT show FROM book_groups WHERE groupId = ${BookGroup.IdNetNone}) != 1
         UNION ALL SELECT ${BookGroup.IdLocal}, COUNT(*) FROM books WHERE type & ${BookType.local} > 0 AND $PUBLIC_BOOK_FILTER
         UNION ALL SELECT ${BookGroup.IdAudio}, COUNT(*) FROM books WHERE type & ${BookType.audio} > 0 AND $PUBLIC_BOOK_FILTER
         UNION ALL SELECT ${BookGroup.IdNetNone}, COUNT(*) FROM books
             WHERE type & ${BookType.audio} = 0 AND type & ${BookType.local} = 0
-            AND ($PUBLIC_GROUP_MASK & `group`) = 0
+            AND `groupId` NOT IN $PUBLIC_GROUP_IDS
             AND $PUBLIC_BOOK_FILTER
         UNION ALL SELECT ${BookGroup.IdLocalNone}, COUNT(*) FROM books
             WHERE type & ${BookType.local} > 0
-            AND ($PUBLIC_GROUP_MASK & `group`) = 0
+            AND `groupId` NOT IN $PUBLIC_GROUP_IDS
             AND $PUBLIC_BOOK_FILTER
         UNION ALL SELECT ${BookGroup.IdManga}, COUNT(*) FROM books WHERE type & ${BookType.image} > 0 AND $PUBLIC_BOOK_FILTER
         UNION ALL SELECT ${BookGroup.IdText}, COUNT(*) FROM books WHERE type & ${BookType.text} > 0 AND $PUBLIC_BOOK_FILTER
@@ -889,7 +900,7 @@ interface BookDao {
     @Query(
         """
         SELECT COUNT(*) FROM books
-        WHERE (`group` & :groupId) > 0
+        WHERE `groupId` = :groupId
         AND ((SELECT isPrivate FROM book_groups WHERE groupId = :groupId) = 1 OR $PUBLIC_BOOK_FILTER)
         """
     )
@@ -923,7 +934,7 @@ interface BookDao {
             coverUrl, customCoverUrl, durChapterTitle, durChapterTime,
             durChapterPos, latestChapterTitle, latestChapterTime,
             lastCheckCount, totalChapterNum, durChapterIndex,
-            type, `group`, `order`, canUpdate,
+            type, `groupId`, `order`, canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro, kind, customTag, wordCount
         FROM books
         WHERE $PUBLIC_BOOK_FILTER
@@ -939,11 +950,11 @@ interface BookDao {
             coverUrl, customCoverUrl, durChapterTitle, durChapterTime,
             durChapterPos, latestChapterTitle, latestChapterTime,
             lastCheckCount, totalChapterNum, durChapterIndex,
-            type, `group`, `order`, canUpdate,
+            type, `groupId`, `order`, canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro, kind, customTag, wordCount
         FROM books
         WHERE type & ${BookType.text} > 0 AND type & ${BookType.local} = 0
-            AND ($PUBLIC_GROUP_MASK & `group`) = 0
+            AND `groupId` NOT IN $PUBLIC_GROUP_IDS
             AND $PUBLIC_BOOK_FILTER
             AND (SELECT show FROM book_groups WHERE groupId = ${BookGroup.IdNetNone}) != 1
         ORDER BY durChapterTime DESC
@@ -958,7 +969,7 @@ interface BookDao {
             coverUrl, customCoverUrl, durChapterTitle, durChapterTime,
             durChapterPos, latestChapterTitle, latestChapterTime,
             lastCheckCount, totalChapterNum, durChapterIndex,
-            type, `group`, `order`, canUpdate,
+            type, `groupId`, `order`, canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro, kind, customTag, wordCount
         FROM books
         WHERE type & ${BookType.local} > 0
@@ -975,7 +986,7 @@ interface BookDao {
             coverUrl, customCoverUrl, durChapterTitle, durChapterTime,
             durChapterPos, latestChapterTitle, latestChapterTime,
             lastCheckCount, totalChapterNum, durChapterIndex,
-            type, `group`, `order`, canUpdate,
+            type, `groupId`, `order`, canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro, kind, customTag, wordCount
         FROM books
         WHERE type & ${BookType.audio} > 0
@@ -992,11 +1003,11 @@ interface BookDao {
             coverUrl, customCoverUrl, durChapterTitle, durChapterTime,
             durChapterPos, latestChapterTitle, latestChapterTime,
             lastCheckCount, totalChapterNum, durChapterIndex,
-            type, `group`, `order`, canUpdate,
+            type, `groupId`, `order`, canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro, kind, customTag, wordCount
         FROM books
         WHERE type & ${BookType.audio} = 0 AND type & ${BookType.local} = 0
-            AND ($PUBLIC_GROUP_MASK & `group`) = 0
+            AND `groupId` NOT IN $PUBLIC_GROUP_IDS
             AND $PUBLIC_BOOK_FILTER
         ORDER BY durChapterTime DESC
         LIMIT 10
@@ -1010,11 +1021,11 @@ interface BookDao {
             coverUrl, customCoverUrl, durChapterTitle, durChapterTime,
             durChapterPos, latestChapterTitle, latestChapterTime,
             lastCheckCount, totalChapterNum, durChapterIndex,
-            type, `group`, `order`, canUpdate,
+            type, `groupId`, `order`, canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro, kind, customTag, wordCount
         FROM books
         WHERE type & ${BookType.local} > 0
-            AND ($PUBLIC_GROUP_MASK & `group`) = 0
+            AND `groupId` NOT IN $PUBLIC_GROUP_IDS
             AND $PUBLIC_BOOK_FILTER
         ORDER BY durChapterTime DESC
         LIMIT 10
@@ -1028,7 +1039,7 @@ interface BookDao {
             coverUrl, customCoverUrl, durChapterTitle, durChapterTime,
             durChapterPos, latestChapterTitle, latestChapterTime,
             lastCheckCount, totalChapterNum, durChapterIndex,
-            type, `group`, `order`, canUpdate,
+            type, `groupId`, `order`, canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro, kind, customTag, wordCount
         FROM books
         WHERE type & ${BookType.image} > 0
@@ -1045,7 +1056,7 @@ interface BookDao {
             coverUrl, customCoverUrl, durChapterTitle, durChapterTime,
             durChapterPos, latestChapterTitle, latestChapterTime,
             lastCheckCount, totalChapterNum, durChapterIndex,
-            type, `group`, `order`, canUpdate,
+            type, `groupId`, `order`, canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro, kind, customTag, wordCount
         FROM books
         WHERE type & ${BookType.text} > 0
@@ -1062,7 +1073,7 @@ interface BookDao {
             coverUrl, customCoverUrl, durChapterTitle, durChapterTime,
             durChapterPos, latestChapterTitle, latestChapterTime,
             lastCheckCount, totalChapterNum, durChapterIndex,
-            type, `group`, `order`, canUpdate,
+            type, `groupId`, `order`, canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro, kind, customTag, wordCount
         FROM books
         WHERE type & ${BookType.updateError} > 0
@@ -1079,7 +1090,7 @@ interface BookDao {
             coverUrl, customCoverUrl, durChapterTitle, durChapterTime,
             durChapterPos, latestChapterTitle, latestChapterTime,
             lastCheckCount, totalChapterNum, durChapterIndex,
-            type, `group`, `order`, canUpdate,
+            type, `groupId`, `order`, canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro, kind, customTag, wordCount
         FROM books
         WHERE durChapterIndex = 0 AND durChapterPos = 0
@@ -1096,7 +1107,7 @@ interface BookDao {
             coverUrl, customCoverUrl, durChapterTitle, durChapterTime,
             durChapterPos, latestChapterTitle, latestChapterTime,
             lastCheckCount, totalChapterNum, durChapterIndex,
-            type, `group`, `order`, canUpdate,
+            type, `groupId`, `order`, canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro, kind, customTag, wordCount
         FROM books
         WHERE totalChapterNum > 0 AND durChapterIndex > 0 AND durChapterIndex < totalChapterNum - 1
@@ -1113,7 +1124,7 @@ interface BookDao {
             coverUrl, customCoverUrl, durChapterTitle, durChapterTime,
             durChapterPos, latestChapterTitle, latestChapterTime,
             lastCheckCount, totalChapterNum, durChapterIndex,
-            type, `group`, `order`, canUpdate,
+            type, `groupId`, `order`, canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro, kind, customTag, wordCount
         FROM books
         WHERE totalChapterNum > 0 AND durChapterIndex >= totalChapterNum - 1
@@ -1130,7 +1141,7 @@ interface BookDao {
             coverUrl, customCoverUrl, durChapterTitle, durChapterTime,
             durChapterPos, latestChapterTitle, latestChapterTime,
             lastCheckCount, totalChapterNum, durChapterIndex,
-            type, `group`, `order`, canUpdate,
+            type, `groupId`, `order`, canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro, kind, customTag, wordCount
         FROM books
         WHERE totalChapterNum > 0 AND durChapterIndex >= totalChapterNum - 1 AND canUpdate = 1
@@ -1147,7 +1158,7 @@ interface BookDao {
             coverUrl, customCoverUrl, durChapterTitle, durChapterTime,
             durChapterPos, latestChapterTitle, latestChapterTime,
             lastCheckCount, totalChapterNum, durChapterIndex,
-            type, `group`, `order`, canUpdate,
+            type, `groupId`, `order`, canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro, kind, customTag, wordCount
         FROM books
         WHERE totalChapterNum > 0 AND durChapterIndex >= totalChapterNum - 1 AND canUpdate = 0
@@ -1164,10 +1175,10 @@ interface BookDao {
             coverUrl, customCoverUrl, durChapterTitle, durChapterTime,
             durChapterPos, latestChapterTitle, latestChapterTime,
             lastCheckCount, totalChapterNum, durChapterIndex,
-            type, `group`, `order`, canUpdate,
+            type, `groupId`, `order`, canUpdate,
             ifnull(customIntro, ifnull(listIntro, intro)) as intro, kind, customTag, wordCount
         FROM books
-        WHERE (`group` & :groupId) > 0
+        WHERE `groupId` = :groupId
             AND ((SELECT isPrivate FROM book_groups WHERE groupId = :groupId) = 1 OR $PUBLIC_BOOK_FILTER)
         ORDER BY durChapterTime DESC
         LIMIT 10
@@ -1192,10 +1203,9 @@ interface BookDao {
         SELECT
             CASE WHEN
                 COALESCE((SELECT isPrivate FROM books WHERE bookUrl = :bookUrl), 0) = 1
-                OR ($PRIVATE_GROUP_MASK
-                    & COALESCE((SELECT `group` FROM books WHERE bookUrl = :bookUrl), 0)) <> 0
+                OR COALESCE((SELECT `groupId` FROM books WHERE bookUrl = :bookUrl), 0) IN $PRIVATE_GROUP_IDS
             THEN 1 ELSE 0 END AS isPrivate,
-            COALESCE((SELECT `group` FROM books WHERE bookUrl = :bookUrl), 0) AS groupMask
+            COALESCE((SELECT `groupId` FROM books WHERE bookUrl = :bookUrl), 0) AS groupId
         """
     )
     fun privateFacts(bookUrl: String): PrivateBookFacts

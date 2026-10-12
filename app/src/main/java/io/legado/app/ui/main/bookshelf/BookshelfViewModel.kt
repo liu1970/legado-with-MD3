@@ -203,20 +203,21 @@ class BookshelfViewModel(
         )
 
     /**
-     * 私密判定所需的两个来源：私密分组掩码 + 被单独标记的书籍 url。
+     * 私密判定所需的两个来源：私密分组 ID 集合 + 被单独标记的书籍 url。
      * 判定在内存侧求并集，避免改动 BookDao 里十几处 BookShelfItem 投影。
+     * groupId 已是 single-id（130→131 迁移后），不再用位掩码求和。
      */
     private data class PrivateMarkers(
-        val groupMask: Long,
+        val groupIds: Set<Long>,
         val bookUrls: Set<String>
     )
 
     private fun PrivateMarkers.isPrivate(item: BookShelfItem): Boolean =
         isPrivateBook(
             bookUrl = item.bookUrl,
-            group = item.group,
+            groupId = item.groupId,
             privateBookUrls = bookUrls,
-            privateGroupMask = groupMask
+            privateGroupIds = groupIds,
         )
 
     private val privateMarkersFlow: StateFlow<PrivateMarkers> = combine(
@@ -224,12 +225,13 @@ class BookshelfViewModel(
         privateContentGateway.flowPrivateBookUrls()
     ) { groups, privateBookUrls ->
         PrivateMarkers(
-            groupMask = groups.fold(0L) { acc, group ->
-                if (group.groupId > 0 && group.isPrivate) acc or group.groupId else acc
-            },
+            groupIds = groups
+                .filter { it.groupId > 0 && it.isPrivate }
+                .map { it.groupId }
+                .toSet(),
             bookUrls = privateBookUrls
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), PrivateMarkers(0L, emptySet()))
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), PrivateMarkers(emptySet(), emptySet()))
 
     private val hideEmptyGroupsFlow: StateFlow<Boolean> = bookshelfSettings
         .map { it.hideEmptyGroups }

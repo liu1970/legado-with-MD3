@@ -208,9 +208,10 @@ class BookshelfCoverPreloader(
         val allGroups = bookGroupRepository.flowAll().first()
         val group: BookGroup? = showGroups.find { it.groupId == groupId }
         val privateBookUrls = privateContentGateway.flowPrivateBookUrls().first()
-        val privateGroupMask = allGroups.fold(0L) { acc, it ->
-            if (it.groupId > 0 && it.isPrivate) acc or it.groupId else acc
-        }
+        val privateGroupIds = allGroups
+            .filter { it.groupId > 0 && it.isPrivate }
+            .map { it.groupId }
+            .toSet()
 
         val candidates = bookshelfRepository.sortBooks(
             list = bookRepository.flowBookShelfByGroup(groupId).first(),
@@ -219,7 +220,9 @@ class BookshelfCoverPreloader(
             sortOrder = settings.bookshelfSortOrder,
         ).asSequence()
             // 锁定态的卡片用的是另一套内存键，预热清晰封面既无用也只是白解码
-            .filterNot { isPrivateBook(it.bookUrl, it.group, privateBookUrls, privateGroupMask) }
+            .filterNot {
+                isPrivateBook(it.bookUrl, it.groupId, privateBookUrls, privateGroupIds)
+            }
             .mapNotNull { it.toCoverPreloadCandidate() }
             .toList()
 

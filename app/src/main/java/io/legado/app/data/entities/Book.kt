@@ -76,9 +76,11 @@ data class Book(
     // 类型,详见BookType
     @ColumnInfo(defaultValue = "0")
     var type: Int = BookType.text,
-    // 自定义分组索引号
+    // 单一书架 ID（130→131 迁移：原 `group` 位掩码收敛到最低位后改名为 `groupId`）。
+    // 0 表示"全部"（既不属于任何用户自定义书架）；负数为系统预设（IdAll/IdLocal/IdAudio 等）；
+    // 正数为用户自定义书架 ID。
     @ColumnInfo(defaultValue = "0")
-    var group: Long = 0,
+    var groupId: Long = 0,
     // 单独标记为私密书籍（与所属分组无关；私密判定 = 本标记 ∪ 所属私密分组）
     //
     // 关于备份：这个字段会随 bookshelf.json 明文进本地/云备份（Gson 不认 @Transient）。
@@ -417,7 +419,7 @@ data class Book(
         )
         newBook.durChapterPos = durChapterPos
         newBook.durChapterTime = durChapterTime
-        newBook.group = group
+        newBook.groupId = groupId
         newBook.order = order
         newBook.customCoverUrl = customCoverUrl
         newBook.customIntro = customIntro

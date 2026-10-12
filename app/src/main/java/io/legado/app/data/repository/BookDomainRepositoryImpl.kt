@@ -38,7 +38,7 @@ class BookDomainRepositoryImpl(
         return getBooks(bookUrls).map { book ->
             BookGroupAssignment(
                 bookUrl = book.bookUrl,
-                group = book.group
+                groupId = book.groupId
             )
         }
     }
@@ -48,7 +48,8 @@ class BookDomainRepositoryImpl(
         val groups = assignments.associateBy { it.bookUrl }
         val books = getBooks(groups.keys).mapNotNull { book ->
             groups[book.bookUrl]?.let { assignment ->
-                if (book.group == assignment.group) null else book.copy(group = assignment.group)
+                if (book.groupId == assignment.groupId) null
+                else book.copy(groupId = assignment.groupId)
             }
         }
         if (books.isNotEmpty()) {

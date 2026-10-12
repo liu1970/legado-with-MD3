@@ -22,6 +22,7 @@ object DatabaseMigrations {
             migration_39_40, migration_40_41, migration_41_42, migration_42_43,
             migration_82_83, migration_98_99, migration_99_100,
             migration_102_103, migration_123_124, migration_124_125, migration_127_128,
+            migration_130_131,
         )
     }
 
@@ -896,6 +897,99 @@ object DatabaseMigrations {
             )
             db.execSQL("DROP TABLE highlightRules")
             db.execSQL("ALTER TABLE highlightRules_r56 RENAME TO highlightRules")
+        }
+    }
+
+    /**
+     * 130 → 131：`books.group` 位掩码列 → 单一书架 ID 列 `books.groupId`。
+     *
+     * 历史 `group` 是 64 位位掩码（一位 = 一个用户自定义书架分组），允许一本书同时属于多个分组。
+     * 新约束是"一本书只能在一个用户书架里"：手动入架时整列覆盖，不再位 OR。
+     * TagGroupRule 自动归类（位 OR）仍保留，但目标列改为 `groupId`，规则应用改为 `book.groupId = newMask`
+     * （覆盖式，但保持"自动归类可叠加"语义的话只能二选一；这里选严格单一）。
+     *
+     * 老数据收敛：把多位掩码 `group` 收敛到最低位（即最早创建的自定义书架），
+     * 负数系统预设保持原值，0 保持 0（"全部"）。
+     *
+     * SQLite 在 minSdk 26 上没有 RENAME COLUMN / DROP COLUMN，走本文件惯用的整表重建手法：
+     * CREATE TABLE books_r131(... groupId ...) → INSERT ... SELECT `group` & -`group` AS groupId ...→ DROP → RENAME。
+     */
+    private val migration_130_131 = object : Migration(130, 131) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                    """
+                    CREATE TABLE books_r131 (
+                        `bookUrl` TEXT NOT NULL DEFAULT '',
+                        `tocUrl` TEXT NOT NULL DEFAULT '',
+                        `origin` TEXT NOT NULL DEFAULT 'loc_book',
+                        `originName` TEXT NOT NULL DEFAULT '',
+                        `name` TEXT NOT NULL DEFAULT '',
+                        `author` TEXT NOT NULL DEFAULT '',
+                        `kind` TEXT,
+                        `customTag` TEXT,
+                        `coverUrl` TEXT,
+                        `customCoverUrl` TEXT,
+                        `intro` TEXT,
+                        `customIntro` TEXT,
+                        `remark` TEXT,
+                        `charset` TEXT,
+                        `type` INTEGER NOT NULL DEFAULT 0,
+                        `groupId` INTEGER NOT NULL DEFAULT 0,
+                        `isPrivate` INTEGER NOT NULL DEFAULT 0,
+                        `latestChapterTitle` TEXT,
+                        `latestChapterTime` INTEGER NOT NULL DEFAULT 0,
+                        `lastCheckTime` INTEGER NOT NULL DEFAULT 0,
+                        `lastCheckCount` INTEGER NOT NULL DEFAULT 0,
+                        `totalChapterNum` INTEGER NOT NULL DEFAULT 0,
+                        `durChapterTitle` TEXT,
+                        `durChapterIndex` INTEGER NOT NULL DEFAULT 0,
+                        `durChapterPos` INTEGER NOT NULL DEFAULT 0,
+                        `durChapterTime` INTEGER NOT NULL DEFAULT 0,
+                        `wordCount` TEXT,
+                        `canUpdate` INTEGER NOT NULL DEFAULT 1,
+                        `order` INTEGER NOT NULL DEFAULT 0,
+                        `originOrder` INTEGER NOT NULL DEFAULT 0,
+                        `variable` TEXT,
+                        `readConfig` TEXT,
+                        `syncTime` INTEGER NOT NULL DEFAULT 0,
+                        `listIntro` TEXT,
+                        PRIMARY KEY(`bookUrl`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO books_r131(
+                        `bookUrl`, `tocUrl`, `origin`, `originName`, `name`, `author`,
+                        `kind`, `customTag`, `coverUrl`, `customCoverUrl`,
+                        `intro`, `customIntro`, `remark`, `charset`, `type`,
+                        `groupId`, `isPrivate`, `latestChapterTitle`, `latestChapterTime`,
+                        `lastCheckTime`, `lastCheckCount`, `totalChapterNum`,
+                        `durChapterTitle`, `durChapterIndex`, `durChapterPos`, `durChapterTime`,
+                        `wordCount`, `canUpdate`, `order`, `originOrder`,
+                        `variable`, `readConfig`, `syncTime`, `listIntro`
+                    )
+                    SELECT
+                        `bookUrl`, `tocUrl`, `origin`, `originName`, `name`, `author`,
+                        `kind`, `customTag`, `coverUrl`, `customCoverUrl`,
+                        `intro`, `customIntro`, `remark`, `charset`, `type`,
+                        -- 多位掩码收敛到最低位；负数系统预设 / 0 保持原值。
+                        CASE WHEN `group` > 0 AND (`group` & (`group` - 1)) != 0
+                             THEN `group` & -`group`
+                             ELSE `group`
+                         END AS groupId,
+                        `isPrivate`, `latestChapterTitle`, `latestChapterTime`,
+                        `lastCheckTime`, `lastCheckCount`, `totalChapterNum`,
+                        `durChapterTitle`, `durChapterIndex`, `durChapterPos`, `durChapterTime`,
+                        `wordCount`, `canUpdate`, `order`, `originOrder`,
+                        `variable`, `readConfig`, `syncTime`, `listIntro`
+                    FROM books
+                    """.trimIndent()
+                )
+            db.execSQL("DROP TABLE books")
+            db.execSQL("ALTER TABLE books_r131 RENAME TO books")
+            db.execSQL("CREATE INDEX index_books_name_author ON books (`name`, `author`)")
+            db.execSQL("CREATE INDEX index_books_durChapterTime ON books (`durChapterTime`)")
         }
     }
 }

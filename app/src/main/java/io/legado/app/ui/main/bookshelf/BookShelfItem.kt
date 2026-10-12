@@ -27,7 +27,8 @@ data class BookShelfItem(
     val totalChapterNum: Int,
     val durChapterIndex: Int,
     val type: Int,
-    val group: Long,
+    /** 所属书架 ID（single-id；与 Book.groupId 同步）。 */
+    val groupId: Long,
     val order: Int,
     val canUpdate: Boolean = true,
     val intro: String? = null,
@@ -86,7 +87,7 @@ data class BookShelfItem(
          * 避免 UiState 与 ViewModel 各自复制一份谓词后漂移。
          */
 fun BookUiItem.isLocked(access: PrivateAccessState, verifyOnOpenBook: Boolean): Boolean =
-    isPrivate && verifyOnOpenBook && !access.isTargetGranted(book.bookUrl, book.group)
+    isPrivate && verifyOnOpenBook && !access.isTargetGranted(book.bookUrl, book.groupId)
 
 data class BookUiItem(
     val book: BookShelfItem,
@@ -118,7 +119,7 @@ fun BookShelfItem.toLightBook() = Book(
     durChapterPos = durChapterPos,
     durChapterTime = durChapterTime,
     type = type,
-    group = group,
+    groupId = groupId,
     order = order,
     canUpdate = canUpdate,
     wordCount = wordCount,

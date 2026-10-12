@@ -50,6 +50,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.outlined.FormatListBulleted
 import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.BookmarkAdd
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Group
@@ -430,6 +431,7 @@ private fun BookInfoScreenContent(
                                             onGroupClick = { onIntent(BookInfoIntent.GroupClick) },
                                             onSourceClick = { onIntent(BookInfoIntent.ChangeSourceClick) },
                                             onReadRecordClick = { onIntent(BookInfoIntent.ReadRecordClick) },
+                                            onOfflineCacheClick = { onIntent(BookInfoIntent.OfflineCacheClick) },
                                         )
                                         if (
                                             state.characters.isNotEmpty() ||
@@ -528,7 +530,7 @@ private fun BookInfoScreenContent(
             GroupSelectSheet(
                 show = currentSheet == BookInfoSheet.GroupPicker,
                 groups = groups,
-                currentGroupId = state.book?.group ?: 0L,
+                currentGroupId = state.book?.groupId ?: 0L,
                 onDismissRequest = { onIntent(BookInfoIntent.DismissSheet) },
                 onConfirm = { onIntent(BookInfoIntent.SelectGroup(it)) },
             )
@@ -1364,6 +1366,7 @@ private fun BookInfoActions(
     onGroupClick: () -> Unit,
     onSourceClick: () -> Unit,
     onReadRecordClick: () -> Unit,
+    onOfflineCacheClick: () -> Unit,
 ) {
     var awaitingShelfAddition by rememberSaveable { mutableStateOf(false) }
     var showShelfRemoveHint by rememberSaveable { mutableStateOf(false) }
@@ -1447,6 +1450,12 @@ private fun BookInfoActions(
         )
         BookInfoActionCard(
             modifier = Modifier.weight(1f),
+            icon = Icons.Default.CloudDownload,
+            label = stringResource(R.string.offline_cache),
+            onClick = onOfflineCacheClick
+        )
+        BookInfoActionCard(
+            modifier = Modifier.weight(1f),
             icon = Icons.Default.Code,
             label = stringResource(R.string.change_origin),
             onClick = onSourceClick
@@ -1484,8 +1493,8 @@ private fun BookInfoActionCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+                .padding(horizontal = 4.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             AppIcon(icon, null)

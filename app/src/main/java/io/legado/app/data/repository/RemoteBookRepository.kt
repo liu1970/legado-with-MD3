@@ -74,7 +74,7 @@ class RemoteBookRepository(
         newBook.durChapterIndex = book.durChapterIndex
         newBook.durChapterPos = book.durChapterPos
         newBook.order = book.order
-        newBook.group = book.group
+        newBook.groupId = book.groupId
         return newBook
     }
 

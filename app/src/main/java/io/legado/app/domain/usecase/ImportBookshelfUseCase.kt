@@ -91,7 +91,7 @@ class ImportBookshelfUseCase(
                     if (foundBook != null) {
                         val book = foundBook
                         if (groupId > 0) {
-                            book.group = groupId
+                            book.groupId = groupId
                         }
                         if (bookRepository.getBook(book.bookUrl) != null) {
                             bookRepository.update(book)
