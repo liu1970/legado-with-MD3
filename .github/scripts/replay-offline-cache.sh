@@ -25,14 +25,20 @@ fi
 cd "$REPO_ROOT"
 
 # 1. 应用 patch（3way merge，先 dry-run）
-if ! git apply --check --3way "$PATCH_FILE" 2>&1; then
-  echo "WARN: --check failed, retrying with 3way merge"
-  if ! git apply --3way "$PATCH_FILE" 2>&1; then
-    echo "ERROR: applying patch failed (3way merge)"
-    exit 1
+#    no-op 检测：尝试 apply --reverse 反向应用 patch；如果 patch 的所有改动都已经在 HEAD 里，
+#    `git apply --reverse --check` 会静默通过（PATCH 全部已落地）。
+if git apply --reverse --check "$PATCH_FILE" 2>/dev/null; then
+  echo "OK: patch already applied (reverse --check passed) — no-op"
+else
+  if ! git apply --check --3way "$PATCH_FILE" 2>&1; then
+    echo "WARN: --check failed, retrying with 3way merge"
+    if ! git apply --3way "$PATCH_FILE" 2>&1; then
+      echo "ERROR: applying patch failed (3way merge)"
+      exit 1
+    fi
   fi
+  echo "OK: patch applied"
 fi
-echo "OK: patch applied"
 
 # 2. 把 BookshelfLastAddedStore.kt 放到正确位置（首次应用时新建）
 mkdir -p "$(dirname "$TARGET_FILE")"
@@ -41,7 +47,7 @@ if [[ -f "$REPLAY_FILE" ]]; then
   echo "OK: replay file copied -> $TARGET_FILE"
 fi
 
-# 4. 静默验证（架构护栏 + Kotlin 编译 + KSP）
+# 3. 静默验证（架构护栏 + Kotlin 编译 + KSP）
 echo "==> running verifyConfigArchitecture..."
 ./gradlew --no-daemon --no-configuration-cache verifyConfigArchitecture
 

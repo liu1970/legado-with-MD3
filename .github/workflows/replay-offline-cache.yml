@@ -1,31 +1,49 @@
-# 自动 reapply offcache + 书架/分组 改造
+# 自动 reapply offcache + 书架改造
 #
 # 拉取上游后，自动应用本次改动并跑编译验证：
 #   1) checkout
-#   3) 拉上游 + 本地 rebase origin/main
-#   4) 跑 .github/scripts/apply-offline-cache-replay.sh (apply patch + build verify)
-#   5) 成功 → 自动 commit + 开 PR "chore(replay): reapply offcache + 书架改造"
-#   6) 失败 → 不 commit，开 "auto-rebase failed" PR 提示手动解决
+#   2) 拉上游 + rebase origin/main
+#   3) 跑 .github/scripts/replay-offline-cache.sh (apply patch + build verify)
+#   4) 成功 → 自动 commit + 开 PR "🔁 replay: reapply offcache + 书架改造"
+#   5) 失败 → 不 commit，开 "❌ replay failed: manual rebase needed" PR
 #
-# 手动触发：
-#   - workflow_dispatch（输入 apply_now: true）
-#   - schedule: 每天 16:00 UTC（与 autoupdatefork 错开 2h，0点任务先无重叠时间）
+# 触发：
+#   - push 到 main（你在 web UI 点 Sync fork 后，会生成一个 merge commit 触发）
+#   - workflow_run: autoupdatefork 完成后（另一种 fork 同步路径）
+#   - workflow_dispatch：手动从 Actions 页面触发
 #
-# 不要把这个 workflow 接入 push 触发器：
-# push 时若上游还没 sync，这个 workflow 会抢跑把脏改动推到 main。
+# 不再使用 schedule cron——每次 push 已足够覆盖，schedule 会造成空跑。
+#
+# 注意：push 触发时只在自己仓库跑，不调用 push-to-HapeLee。
 
 name: Reapply offcache + 书架改造
 
 on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      # 只在上游同步过来或 replay 文件本身被改时才推进；业务文件改动不需要跑这个
+      - '.github/patches/**'
+      - '.github/replays/**'
+      - '.github/scripts/replay-offline-cache.sh'
+      - '.github/workflows/replay-offline-cache.yml'
+      - '.github/REAPPLY_README.md'
+  workflow_run:
+    workflows: [update fork]
+    branches:
+      - main
+      - master
+    types:
+      - completed
   workflow_dispatch:
     inputs:
       apply_now:
-        description: '立即强制 rebase + apply patch（忽略会拉取上游）'
+        description: '立即强制 rebase + apply patch（忽略拉上游）'
         required: false
         type: boolean
         default: false
-  schedule:
-    - cron: '0 18 * * *'  # 每天 02:00 北京时间
 
 permissions:
   contents: write
@@ -38,7 +56,14 @@ concurrency:
 jobs:
   replay:
     runs-on: ubuntu-latest
-    if: github.event.repository.owner.id == github.event.sender.id && github.actor != 'gedoor'
+    # 排除上游 rebase/merge commit 与 bot 自动 commit，避免无限循环
+    if: |
+      (github.event_name == 'push' &&
+        !startsWith(github.event.head_commit.message, 'Merge branch ') &&
+        !startsWith(github.event.head_commit.message, 'update fork')) ||
+      (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success') ||
+      github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -52,29 +77,41 @@ jobs:
           git config --global user.name "github-actions"
           git config --global core.fileMode false
 
-      - name: Fetch upstream and rebase
+      - name: Detect upstream remote
+        id: upstream
         run: |
-          if [ "${{ inputs.apply_now }}" = "true" ]; then
-            echo "apply_now=true: skipping upstream fetch"
+          # 你的 fork 上游是 HapeLee/legado-with-MD3.git
+          UPSTREAM_URL="https://github.com/HapeLee/legado-with-MD3.git"
+          git remote add upstream "$UPSTREAM_URL" 2>/dev/null || git remote set-url upstream "$UPSTREAM_URL"
+          git fetch upstream || { echo "WARN: upstream fetch failed"; echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0; }
+          if git rev-parse upstream/main > /dev/null 2>&1; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            echo "upstream_main=$(git rev-parse upstream/main)" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Rebase onto upstream/main
+        if: steps.upstream.outputs.ok == 'true' && inputs.apply_now != 'true'
+        run: |
+          # 已是最新则跳过 rebase（避免空 commit）
+          LOCAL_HEAD=$(git rev-parse HEAD)
+          UPSTREAM_HEAD=$(git rev-parse upstream/main)
+          if [ "$LOCAL_HEAD" = "$UPSTREAM_HEAD" ]; then
+            echo "Already on upstream/main HEAD, skipping rebase"
             exit 0
           fi
-          git remote add upstream https://github.com/HapeLee/legado-with-MD3.git 2>/dev/null || true
-          # 仅当上游 remote 存在时才拉（仓库是 fork 时；如果是上游仓库本身则跳过）
-          if git remote get-url upstream > /dev/null 2>&1; then
-            git fetch upstream
-            if git rev-parse upstream/main > /dev/null 2>&1; then
+          # 提前 rebase origin/main 或 upstream/main 中更新的那个
+          if git rev-parse origin/main > /dev/null 2>&1; then
+            ORIGIN_HEAD=$(git rev-parse origin/main)
+            if [ "$UPSTREAM_HEAD" != "$ORIGIN_HEAD" ]; then
               echo "Rebasing onto upstream/main"
               if ! git rebase upstream/main; then
-                echo "ERROR: rebase onto upstream/main failed"
-                echo "Please resolve conflicts manually."
+                echo "ERROR: rebase failed, please resolve manually"
                 git rebase --abort || true
                 exit 1
               fi
-            else
-              echo "WARN: upstream/main branch not found, skipping rebase"
             fi
-          else
-            echo "WARN: upstream remote not configured, skipping rebase"
           fi
 
       - name: Set up JDK 21
@@ -93,61 +130,13 @@ jobs:
         id: replay
         run: bash .github/scripts/replay-offline-cache.sh
 
-      - name: Verify architecture + compile
+      - name: Build debug APK
         if: steps.replay.outcome == 'success'
         run: |
           chmod +x gradlew
           ./gradlew --no-daemon --no-configuration-cache \
-            verifyConfigArchitecture :app:compileAppDebugKotlin
-
-      - name: Open PR with changes
-        uses: actions/github-script@v7
-        if: steps.replay.outcome == 'success'
-        with:
-          script: |
-            const branch = 'replay/offcache-' + Date.now();
-            await github.rest.git.createRef({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              ref: 'refs/heads/' + branch,
-              sha: context.sha,
-            });
-            await github.rest.repos.createCommit({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              message: 'replay: reapply offcache + 书架改造 on top of upstream/main',
-              tree: context.sha,
-              parents: [context.sha],
-            });
-
-            const { data: pr } = await github.rest.pulls.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: '🔁 replay: reapply offcache + 书架改造',
-              head: branch,
-              base: context.ref.replace('refs/heads/', ''),
-              body: [
-                '## 自动 reapply',
-                '',
-                '本次 commit 由 `replay-offline-cache` workflow 自动生成，',
-                '把 `.github/patches/offline-cache-bookshelf-v1.patch` 套到当前 main 上。',
-                '',
-                '**编译/护栏已通过**（见 workflow run）。',
-                '',
-                '合并后会自动接入：',
-                '- 详情页"离线缓存"按钮',
-                '- 详情页/书籍元信息（Book） → 单一书架 ID',
-                '- 详情页选组 Sheet 单选（原位掩码 XOR 改为单选）',
-                '- 其他负数书架预设可删除',
-                '',
-                '---',
-                '# 改动文档',
-                '',
-                '请同时阅读 `docs/dev/offline-cache-bookshelf-rework.md`。',
-              ].join('\n'),
-            });
-            core.setOutput('pr_url', pr.html_url);
-            core.notice(`PR: ${pr.html_url}`);
+            assembleAppDebug \
+            2>&1 | tee build-debug.log | tail -200
 
       - name: Upload APK artifact
         if: steps.replay.outcome == 'success'
@@ -157,62 +146,80 @@ jobs:
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: warn
 
-      - name: Open "auto-rebase failed" PR
+      - name: Push replay branch + open PR
+        if: steps.replay.outcome == 'success' && github.event_name != 'workflow_dispatch'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          BRANCH="replay/offcache-$(date +%Y%m%d-%H%M%S)"
+          git checkout -b "$BRANCH"
+          git add -A
+          # 仅有 patch 已合、无新差异时不再 commit
+          if ! git diff --cached --quiet; then
+            git commit -m "replay: reapply offline-cache + 书架/分组改造 on top of upstream
+
+- 自动 rebase upstream/main
+- apply .github/patches/offline-cache-bookshelf-v1.patch
+- verify + assembleAppDebug 已通过
+- 详情见 docs/dev/offline-cache-bookshelf-rework.md"
+            git push -u origin "$BRANCH"
+            gh pr create \
+              --title "🔁 replay: reapply offline-cache + 书架改造" \
+              --base "${GITHUB_REF#refs/heads/}" \
+              --head "$BRANCH" \
+              --body "## 自动 reapply
+
+本次 commit 由 \`replay-offline-cache\` workflow 自动生成，
+把 \`.github/patches/offline-cache-bookshelf-v1.patch\` 套到当前 main 上。
+
+**编译/护栏已通过**（见 workflow run）。
+
+请同时阅读 \`docs/dev/offline-cache-bookshelf-rework.md\`。"
+            echo "PR opened"
+          else
+            echo "No new changes to commit (patch already applied), nothing to do"
+          fi
+
+      - name: Open "manual-rebase-needed" PR on failure
         if: failure()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const branch = 'replay-failed-' + Date.now();
-            await github.rest.git.createRef({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              ref: 'refs/heads/' + branch,
-              sha: context.sha,
-            });
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          BRANCH="replay-failed-$(date +%Y%m%d-%H%M%S)"
+          git checkout -b "$BRANCH"
+          git add -A
+          git commit --allow-empty -m "replay: failed; needs manual intervention"
+          git push -u origin "$BRANCH" || { echo "WARN: push failed, skipping PR"; exit 0; }
+          gh pr create \
+            --title "❌ replay failed: manual rebase needed" \
+            --base "${GITHUB_REF#refs/heads/}" \
+            --head "$BRANCH" \
+            --body "## ❌ 自动 replay 失败
 
-            await github.rest.repos.createCommit({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              message: 'replay: failed; needs manual intervention',
-              tree: context.sha,
-              parents: [context.sha],
-            });
+自动应用 \`offline-cache-bookshelf-v1.patch\` 失败（patch 与上游冲突 / 编译失败）。
 
-            const log = await core.getInput('log', { default: '' }) ||
-                       'Check the workflow run logs at ' + context.payload.head_repository.run_url;
+### 手动处理步骤
 
-            const { data: pr } = await github.rest.pulls.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: '❌ replay failed: manual rebase needed',
-              head: branch,
-              base: context.ref.replace('refs/heads/', ''),
-              body: [
-                '## ❌ 自动 replay 失败',
-                '',
-                '自动应用 `offline-cache-bookshelf-v1.patch` 失败（可能是 patch 与上游代码冲突，或编译未通过）。',
-                '',
-                '### 手动处理步骤',
-                '',
-                '1. 拉取此 PR 的 branch 到本地：',
-                '   ```bash',
-                '   git fetch origin ' + branch,
-                '   git checkout ' + branch,
-                '   ```',
-                '2. 解决冲突（patch 与上游代码的 hunk 调用）。',
-                '3. 重跑 `./gradlew verifyConfigArchitecture :app:compileAppDebugKotlin`',
-                '4. 推送：',
-                '   ```bash',
-                '   git push origin ' + branch,
-                '   ```',
-                '',
-                '### 参考',
-                '',
-                '- `docs/dev/offline-cache-bookshelf-rework.md` 列出所有改动点',
-                '- `.github/patches/offline-cache-bookshelf-v1.patch` 是 patch 本体',
-                '',
-                '### Workflow run logs',
-                context.payload.head_repository.run_url || '(no run url)',
-              ].join('\n'),
-            });
-            core.notice(`Failure PR: ${pr.html_url}`);
+1. 拉取此 PR 的 branch 到本地：
+   \`\`\`bash
+   git fetch origin $BRANCH
+   git checkout $BRANCH
+   \`\`\`
+2. 解决冲突（参考 \`docs/dev/offline-cache-bookshelf-rework.md\` §2.2）
+3. 重跑 \`./gradlew verifyConfigArchitecture :app:compileAppDebugKotlin\`
+4. 推送：
+   \`\`\`bash
+   git push origin $BRANCH
+   \`\`\`
+
+### 参考
+
+- \`docs/dev/offline-cache-bookshelf-rework.md\` — 改动清单
+- \`.github/patches/offline-cache-bookshelf-v1.patch\` — patch 本体
+
+### Workflow run logs
+
+${{ github.server_url }}/${{ github.repository }}/runs/${{ github.run_id }}" \
+          || echo "WARN: PR create failed (gh may not be authenticated)"
