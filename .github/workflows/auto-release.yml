@@ -158,7 +158,8 @@ jobs:
           echo "清空18PlusList.txt"
           echo "">$GITHUB_WORKSPACE/app/src/main/assets/18PlusList.txt
       - name: Release Apk Sign
-        if: ${{ github.actor == 'HapeLee' }}
+        # 仅当仓库配了 SIGNING_KEY secret 时才尝试签名（HapeLee 配了，liu1970 默认没有）
+        if: ${{ github.actor == 'HapeLee' && secrets.SIGNING_KEY != '' }}
         shell: bash
         run: |
           echo "${{ secrets.SIGNING_KEY }}" | base64 -d >"$GITHUB_WORKSPACE/app/my-release-key.jks"
@@ -268,8 +269,9 @@ jobs:
 
   create_release:
     needs: [ prepare, build ]
-    # 只有 Release APK workflow 调用时才发布；普通 Auto Build 仍然只构建产物。
-    if: inputs.publish && github.actor == 'HapeLee' && github.ref == 'refs/heads/main'
+    # publish=true 时（来自 release.yml 的 workflow_call）创建 GitHub Release；
+    # 放宽 actor 限制：liu1970 fork owner 也能发布到自己 fork 的 Releases。
+    if: inputs.publish && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

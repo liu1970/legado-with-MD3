@@ -9,7 +9,10 @@ permissions:
 
 jobs:
   release:
-    if: github.actor == 'HapeLee' && github.ref == 'refs/heads/main'
+    # 放宽 actor 限制：原本只 HapeLee。现在任何 push 到 main 的 owner 都能跑。
+    # auto-release.yml 里的 keystore secrets 仍只对 HapeLee 仓库生效；liu1970 仓库
+    # 如果没配 SIGNING_KEY，会 fallback 到未签名构建并在 create_release 步骤失败（不阻断 APK 上传）。
+    if: github.ref == 'refs/heads/main'
     uses: ./.github/workflows/auto-release.yml
     with:
       publish: true
